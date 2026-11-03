@@ -12,6 +12,8 @@ See runtime-notes.md (not distributed in this supporting-code edition) for the o
 
 ## 1. Environment and explicit configuration
 
+All commands in this guide assume the current working directory is `scripts/repro`. From the repository root, run `Set-Location scripts/repro` in PowerShell first. The root README uses repository-root paths for its separate offline quick start.
+
 Use Windows/PowerShell, Python 3.12, AWS CLI v2 and a valid temporary session in the authorized POC/HML account. The region remains `us-east-1`. Install dependencies in a dedicated virtual environment; no cache or runtime is distributed.
 
 ```powershell
