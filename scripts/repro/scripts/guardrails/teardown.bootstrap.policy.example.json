@@ -1,0 +1,120 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RegionalResourceReadback",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances", "ec2:DescribeInstanceAttribute", "ec2:DescribeVolumes",
+        "ec2:DescribeNetworkInterfaces", "ec2:DescribeVpcEndpoints", "ec2:DescribeNatGateways",
+        "ec2:DescribeAddresses", "ec2:DescribeVpcs", "ec2:DescribeVpcAttribute",
+        "ec2:DescribeSubnets", "ec2:DescribeRouteTables", "ec2:DescribeInternetGateways",
+        "ec2:DescribeSecurityGroups", "ec2:DescribeSecurityGroupRules", "ec2:DescribeTags",
+        "dms:DescribeReplicationInstances", "dms:DescribeReplicationSubnetGroups",
+        "dms:DescribeReplicationTasks", "dms:DescribeEndpoints", "dms:DescribeConnections",
+        "rds:DescribeDBInstances", "rds:DescribeDBParameterGroups", "rds:DescribeDBSubnetGroups"
+      ],
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "us-east-1"}}
+    },
+    {
+      "Sid": "DeleteOnlyTaggedLabEc2Resources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:TerminateInstances", "ec2:DeleteVolume", "ec2:DeleteVpcEndpoints",
+        "ec2:DeleteNatGateway", "ec2:ReleaseAddress", "ec2:DeleteVpc",
+        "ec2:DeleteSubnet", "ec2:DeleteRoute", "ec2:DeleteRouteTable",
+        "ec2:DisassociateRouteTable", "ec2:DetachInternetGateway", "ec2:DeleteInternetGateway",
+        "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:DeleteSecurityGroup"
+      ],
+      "Resource": [
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:instance/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:volume/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:vpc-endpoint/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:natgateway/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:elastic-ip/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:vpc/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:subnet/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:route-table/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:internet-gateway/*",
+        "arn:aws:ec2:us-east-1:__ACCOUNT_ID__:security-group/*"
+      ],
+      "Condition": {"StringEquals": {
+        "aws:ResourceTag/RunId": "__RESOURCE_RUN_ID__",
+        "aws:ResourceTag/Project": "postgresql-migration-lab",
+        "aws:ResourceTag/Environment": "HML",
+        "aws:RequestedRegion": "us-east-1"
+      }}
+    },
+    {
+      "Sid": "DeleteOnlyTaggedLabDmsResources",
+      "Effect": "Allow",
+      "Action": ["dms:DeleteReplicationTask", "dms:DeleteEndpoint", "dms:DeleteConnection", "dms:DeleteReplicationInstance", "dms:DeleteReplicationSubnetGroup"],
+      "Resource": [
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:task:*",
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:endpoint:*",
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:rep:*",
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:subgrp:*"
+      ],
+      "Condition": {"StringEquals": {
+        "aws:ResourceTag/RunId": "__RESOURCE_RUN_ID__",
+        "aws:ResourceTag/Project": "postgresql-migration-lab",
+        "aws:ResourceTag/Environment": "HML"
+      }}
+    },
+    {
+      "Sid": "ReadOnlyLabDmsTags",
+      "Effect": "Allow",
+      "Action": "dms:ListTagsForResource",
+      "Resource": [
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:task:*",
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:endpoint:*",
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:rep:*",
+        "arn:aws:dms:us-east-1:__ACCOUNT_ID__:subgrp:*"
+      ]
+    },
+    {
+      "Sid": "DeleteNamedLabDatabaseResources",
+      "Effect": "Allow",
+      "Action": ["rds:DeleteDBInstance", "rds:DeleteDBParameterGroup", "rds:DeleteDBSubnetGroup", "rds:ListTagsForResource"],
+      "Resource": [
+        "arn:aws:rds:us-east-1:__ACCOUNT_ID__:db:__PREFIX__-target",
+        "arn:aws:rds:us-east-1:__ACCOUNT_ID__:pg:__PREFIX__-*",
+        "arn:aws:rds:us-east-1:__ACCOUNT_ID__:subgrp:__PREFIX__-*"
+      ]
+    },
+    {
+      "Sid": "DeleteGeneratedLabSecretsWithoutReadingValues",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:DescribeSecret", "secretsmanager:DeleteSecret"],
+      "Resource": "arn:aws:secretsmanager:us-east-1:__ACCOUNT_ID__:secret:*",
+      "Condition": {"StringEquals": {
+        "aws:ResourceTag/RunId": "__RESOURCE_RUN_ID__",
+        "aws:ResourceTag/Project": "postgresql-migration-lab",
+        "aws:ResourceTag/Environment": "HML"
+      }}
+    },
+    {
+      "Sid": "DeleteOnlyLabOwnedRoles",
+      "Effect": "Allow",
+      "Action": ["iam:GetRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"],
+      "Resource": [
+        "arn:aws:iam::__ACCOUNT_ID__:role/__PREFIX__-SourceRole-*",
+        "arn:aws:iam::__ACCOUNT_ID__:role/__PREFIX__-DmsSecretAccessRole-*",
+        "arn:aws:iam::__ACCOUNT_ID__:role/dms-vpc-role",
+        "arn:aws:iam::__ACCOUNT_ID__:role/dms-cloudwatch-logs-role"
+      ],
+      "Condition": {"StringEquals": {
+        "aws:ResourceTag/RunId": "__RESOURCE_RUN_ID__",
+        "aws:ResourceTag/Project": "postgresql-migration-lab",
+        "aws:ResourceTag/Environment": "HML"
+      }}
+    },
+    {
+      "Sid": "DeleteOnlyGeneratedLabInstanceProfile",
+      "Effect": "Allow",
+      "Action": ["iam:GetInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:DeleteInstanceProfile"],
+      "Resource": "arn:aws:iam::__ACCOUNT_ID__:instance-profile/__PREFIX__-SourceInstanceProfile-*"
+    }
+  ]
+}
