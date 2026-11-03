@@ -12,20 +12,42 @@ Start with [the reproduction guide](scripts/repro/README-repro.md). The guide di
 
 Use only a disposable, explicitly authorized non-production AWS account and synthetic data. Review every generated template and command. Some scripts create billable resources or delete laboratory resources; none should be run merely to browse this repository. Empty example configuration deliberately refuses execution.
 
-The inherited budget values are validation settings, not spending approval or a billing cap. The rates file is an October 2026 historical snapshot, not a current quotation. Check current service availability, prices, permissions, expiry and cleanup before running anything. Do not commit filled configuration, credentials, generated readbacks or exports.
+The inherited budget values are validation settings, not spending approval or a billing cap. The rates file is an October 2026 historical snapshot, not a current quotation. The runtime estimator also contains auxiliary rate constants; review both `scripts/repro/rates/cost-scenarios.json` and `scripts/repro/scripts/verification/estimate_runtime_cost.py` before using a new cost estimate. Check current service availability, prices, permissions, expiry and cleanup before running anything. Do not commit filled configuration, credentials, generated readbacks or exports.
 
 No AWS infrastructure was created or tested for this publication. Offline checks do not establish production readiness. Prepared transactions, other writer identities and ambiguous commit outcomes require explicit validation beyond the historical demonstrations.
 
-## Local checks
+## Quick start: local checks only
 
-Use a disposable copy and an isolated Python environment with the dependencies in `scripts/repro/requirements-local.txt`. The regression suite writes synthetic fixtures and receipts.
+Prerequisites: Git and Python 3.12. Clone into a disposable working directory; the tests write synthetic fixtures and receipts. Installing the pinned dependencies requires internet access. The tests themselves run offline and do not need AWS credentials, an AWS account or the AWS CLI.
 
 ```sh
-python -B scripts/repro/qa/test_cutover_revision.py
-python -B scripts/repro/qa/test_repro.py
+git clone https://github.com/gustavoconti-cloud/postgresql16-migration-lab.git
+cd postgresql16-migration-lab
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r scripts/repro/requirements-local.txt
+.venv/bin/python -B scripts/repro/qa/test_cutover_revision.py
+.venv/bin/python -B scripts/repro/qa/test_repro.py
 ```
 
-The scripts target the runtime documented in the reproduction guide. Preserve assertions: do not use Python `-O`.
+On Windows PowerShell, replace the last four commands with:
+
+```powershell
+py -3.12 -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install -r scripts/repro/requirements-local.txt
+& .\.venv\Scripts\python.exe -B scripts/repro/qa/test_cutover_revision.py
+& .\.venv\Scripts\python.exe -B scripts/repro/qa/test_repro.py
+```
+
+Both suites should finish with `OK`: 19 cutover-regression methods and 19 reproduction-regression methods. These include additional nested checks and template linting. Preserve assertions: do not use Python `-O`. These results validate the local checks, not a live migration.
+
+## Repository layout
+
+- `scripts/repro/README-repro.md`: operator guide for a separately authorized AWS laboratory run, including cleanup.
+- `scripts/repro/*.example.json`: unbound example configurations; do not use them as evidence of a real environment.
+- `scripts/repro/scripts/`: infrastructure builders, migration controls, harness, resolver, cleanup and verification code.
+- `scripts/repro/qa/`: offline regression suites.
+- `scripts/repro/rates/`: dated public-rate snapshot and hypothetical cost scenarios.
+- `LICENSES/`, `NOTICE` and `THIRD-PARTY.md`: retained third-party terms and provenance.
 
 ## Rights and third-party components
 

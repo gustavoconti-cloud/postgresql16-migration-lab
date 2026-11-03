@@ -23,3 +23,8 @@ config.json
 **/scripts/control/RUN-*.sh
 **/scripts/control/runtime-config.json
 **/scripts/guardrails/teardown.bootstrap.policy.json
+
+# Generated account-bound configuration and execution scripts
+**/migration.bindings.json
+**/scripts/control/*.sh
+**/scripts/verification/before-teardown.json
