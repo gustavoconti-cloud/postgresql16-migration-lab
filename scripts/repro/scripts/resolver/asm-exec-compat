@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+# Modified laboratory compatibility copy of AWS asm-exec (Apache-2.0).
+# Upstream: aws/agent-toolkit-for-aws, commit
+# af9a95cce54248a338f9be95f8ebd41ceafa3b73; original SHA-256:
+# 38399ce2a9a2b5e69fc9179815d90669e80612ea1dfc4dc2d399db9608488035.
+# Existing local changes: run_script MCP backend, asynchronous polling,
+# response checks, process-local cache, timeouts and sanitized diagnostics.
+# Edition 4 adds this provenance notice only; executable logic is unchanged.
+# See THIRD-PARTY.md, NOTICE and LICENSES/Apache-2.0-aws-agent-toolkit.txt
+# at the root of the distributed package.
+"""asm-exec: Resolve {{resolve:secretsmanager:...}} references and run the command.
+
+Usage: asm-exec <command> [args...]
+
+Resolves dynamic references in arguments and exported environment variables,
+then runs the command. Secret values never return to the calling agent.
+
+Resolution order:
+  1. AWS Secrets Manager Agent (SMA) on localhost:2773 (zero-latency, cached)
+  2. Streamable HTTP MCP endpoint (requires AWS credentials)
+
+Security: Uses re.sub with callable for single-pass substitution (resolved
+values are never re-scanned). SecretBinary is not supported.
+"""
+
+import datetime
+import hashlib
+import hmac
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def _shell_quote(value):
+    """Quote a value for safe inclusion in the cli_command string."""
+    return shlex.quote(value)
+
+PATTERN = re.compile(r'\{\{resolve:secretsmanager:([^}]+)\}\}')
+SMA_ENDPOINT = os.environ.get('AWS_SECRETS_MANAGER_AGENT_ENDPOINT', 'http://localhost:2773')
+SSRF_TOKEN = os.environ.get('AWS_SESSION_TOKEN', os.environ.get('AWS_TOKEN', ''))
+MCP_ENDPOINT = os.environ.get('ASM_EXEC_MCP_ENDPOINT', 'https://aws-mcp.us-east-1.api.aws/mcp')
+
+_sma_available = None
+_mcp_secret_cache = {}  # Process memory only; full value reused across JSON fields.
+MCP_LAST_ERROR = None  # Sanitized class/code only; never a provider response.
+
+
+def _check_sma():
+    global _sma_available
+    if _sma_available is None:
+        try:
+            req = urllib.request.Request(f'{SMA_ENDPOINT}/ping', method='GET')
+            urllib.request.urlopen(req, timeout=1)
+            _sma_available = True
+        except (urllib.error.URLError, OSError):
+            _sma_available = False
+    return _sma_available
+
+
+def _get_aws_credentials():
+    """Resolve AWS credentials for SigV4 signing.
+
+    Order: environment variables, then `aws configure export-credentials`
+    (AWS CLI v2), then `aws configure get` (AWS CLI v1, which lacks
+    export-credentials). Returns a dict with access_key/secret_key/token or None.
+    """
+    if os.environ.get('AWS_ACCESS_KEY_ID'):
+        return {
+            'access_key': os.environ['AWS_ACCESS_KEY_ID'],
+            'secret_key': os.environ.get('AWS_SECRET_ACCESS_KEY', ''),
+            'token': os.environ.get('AWS_SESSION_TOKEN', ''),
+        }
+    # AWS CLI v2: export-credentials emits resolved (possibly assumed-role) creds.
+    try:
+        result = subprocess.run(
+            ['aws', 'configure', 'export-credentials', '--format', 'env'],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+        creds = {}
+        for line in result.stdout.splitlines():
+            if '=' in line:
+                line = line.removeprefix('export ')
+                k, v = line.split('=', 1)
+                if k == 'AWS_ACCESS_KEY_ID':
+                    creds['access_key'] = v
+                elif k == 'AWS_SECRET_ACCESS_KEY':
+                    creds['secret_key'] = v
+                elif k == 'AWS_SESSION_TOKEN':
+                    creds['token'] = v
+        if creds.get('access_key'):
+            return creds
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    # AWS CLI v1 fallback: read static creds from the configured profile.
+    try:
+        def _cfg(key):
+            r = subprocess.run(['aws', 'configure', 'get', key],
+                               capture_output=True, text=True, timeout=5)
+            return r.stdout.strip() if r.returncode == 0 else ''
+        access_key = _cfg('aws_access_key_id')
+        if access_key:
+            return {
+                'access_key': access_key,
+                'secret_key': _cfg('aws_secret_access_key'),
+                'token': _cfg('aws_session_token'),
+            }
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _signing_service_region(endpoint):
+    """Derive (service, region) for SigV4 from an AWS MCP endpoint hostname.
+
+    Mirrors mcp-proxy-for-aws: 'service.region.api.aws' -> (service, region);
+    'bedrock-agentcore' style is handled as a special case. The signing region
+    is the endpoint's own region, independent of any secret's region.
+    """
+    host = urllib.parse.urlparse(endpoint).hostname or ''
+    parts = host.split('.')
+    if len(parts) >= 5 and parts[-4] == 'bedrock-agentcore' and parts[-2:] == ['amazonaws', 'com']:
+        return 'bedrock-agentcore', parts[-3]
+    if len(parts) == 4 and parts[2:] == ['api', 'aws']:
+        return parts[0], parts[1]
+    # Fallback: first segment as service, region from environment.
+    region = os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
+    return (parts[0] if parts else 'aws-mcp'), region
+
+
+def _sign_v4(method, path, body, creds, service, region, now):
+    """Compute SigV4 headers (stdlib only) for a request. Returns a header dict.
+
+    botocore is not available in asm-exec's runtime, so signing is implemented
+    directly with hashlib/hmac following the AWS SigV4 spec.
+    """
+    host = urllib.parse.urlparse(MCP_ENDPOINT).hostname or ''
+    amzdate = now.strftime('%Y%m%dT%H%M%SZ')
+    datestamp = now.strftime('%Y%m%d')
+    payload_hash = hashlib.sha256(body).hexdigest()
+
+    headers = {
+        'host': host,
+        'x-amz-date': amzdate,
+        'x-amz-content-sha256': payload_hash,
+    }
+    if creds.get('token'):
+        headers['x-amz-security-token'] = creds['token']
+
+    signed_keys = sorted(headers)
+    canonical_headers = ''.join(f'{k}:{headers[k].strip()}\n' for k in signed_keys)
+    signed_headers_str = ';'.join(signed_keys)
+    canonical_request = (f'{method}\n{path}\n\n{canonical_headers}\n'
+                         f'{signed_headers_str}\n{payload_hash}')
+
+    scope = f'{datestamp}/{region}/{service}/aws4_request'
+    string_to_sign = (f'AWS4-HMAC-SHA256\n{amzdate}\n{scope}\n'
+                      f'{hashlib.sha256(canonical_request.encode()).hexdigest()}')
+
+    def _hmac(key, msg):
+        return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+
+    k_date = _hmac(('AWS4' + creds['secret_key']).encode('utf-8'), datestamp)
+    k_region = _hmac(k_date, region)
+    k_service = _hmac(k_region, service)
+    k_signing = _hmac(k_service, 'aws4_request')
+    signature = hmac.new(k_signing, string_to_sign.encode('utf-8'),
+                         hashlib.sha256).hexdigest()
+
+    headers['Authorization'] = (
+        f'AWS4-HMAC-SHA256 Credential={creds["access_key"]}/{scope}, '
+        f'SignedHeaders={signed_headers_str}, Signature={signature}'
+    )
+    return headers
+
+
+def _mcp_post(payload, session_id=None):
+    """POST a SigV4-signed JSON-RPC request to the AWS MCP endpoint.
+
+    Returns (parsed_response, session_id_from_response). The caller passes the
+    session id returned by 'initialize' back into subsequent calls.
+    """
+    creds = _get_aws_credentials()
+    if not creds or not creds.get('access_key'):
+        raise RuntimeError('no AWS credentials available for MCP signing')
+
+    body = json.dumps(payload).encode()
+    service, region = _signing_service_region(MCP_ENDPOINT)
+    path = urllib.parse.urlparse(MCP_ENDPOINT).path or '/'
+    now = datetime.datetime.utcnow()
+
+    sig_headers = _sign_v4('POST', path, body, creds, service, region, now)
+    req = urllib.request.Request(MCP_ENDPOINT, data=body, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('Accept', 'application/json, text/event-stream')
+    req.add_header('User-Agent', 'ASMExecWrapper/1.0.0')
+    if session_id:
+        req.add_header('Mcp-Session-Id', session_id)
+    for k, v in sig_headers.items():
+        req.add_header(k, v)
+
+    resp = urllib.request.urlopen(req, timeout=55)
+    session_out = resp.headers.get('Mcp-Session-Id')
+    raw = resp.read()
+    parsed = json.loads(raw) if raw else {}
+    return parsed, session_out
+
+
+def _extract_secret_string(payload):
+    """Pull SecretString out of a parsed get-secret-value response dict."""
+    if isinstance(payload, dict):
+        if "SecretString" in payload:
+            return payload["SecretString"]
+        # call_aws may nest the CLI output under a results/output key
+        for key in ("result", "results", "output", "stdout"):
+            if key in payload:
+                nested = payload[key]
+                if isinstance(nested, str):
+                    try:
+                        nested = json.loads(nested)
+                    except json.JSONDecodeError:
+                        continue
+                found = _extract_secret_string(nested)
+                if found:
+                    return found
+    return None
+
+
+def _mcp_payloads(payload, depth=0):
+    """Normalize current structured/text responses without emitting their values."""
+    if depth > 12:
+        return
+    if isinstance(payload, dict):
+        yield payload
+        for key, value in payload.items():
+            if key == 'text' and isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if isinstance(value, (dict, list)):
+                yield from _mcp_payloads(value, depth + 1)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _mcp_payloads(item, depth + 1)
+
+
+def _mcp_verified_secret(payload):
+    """Accept only a successful exact API call and a non-console return_value."""
+    for item in _mcp_payloads(payload):
+        if item.get('status') != 'success':
+            continue
+        calls = item.get('api_calls')
+        value = item.get('return_value')
+        if not isinstance(calls, list) or len(calls) != 1 or not isinstance(value, dict):
+            continue
+        call = calls[0]
+        if (not isinstance(call, dict) or call.get('service') != 'secretsmanager'
+                or call.get('operation') != 'GetSecretValue' or call.get('status') != 'success'):
+            continue
+        if item.get('stdout') not in (None, '') or item.get('stderr') not in (None, ''):
+            continue
+        secret = value.get('SecretString')
+        if isinstance(secret, str) and secret:
+            return secret
+    return None
+
+
+def _mcp_working_task(payload):
+    for item in _mcp_payloads(payload):
+        if item.get('status') == 'working' and isinstance(item.get('task_id'), str):
+            wait = item.get('recommended_wait_seconds', 2)
+            wait = min(5, max(1, wait)) if isinstance(wait, (int, float)) else 2
+            return item['task_id'], wait
+    return None
+
+
+def _resolve_via_mcp(secret_name, label, region):
+    """Resolve inside this wrapper using the current official MCP provider tool.
+
+    Dynamic references, SigV4, field extraction, and single-pass substitution
+    remain unchanged. Only this provider backend uses run_script in place of the
+    retired call_aws. No direct local CLI/SDK/HTTP secret-value fetch is added.
+    """
+    global MCP_LAST_ERROR
+    MCP_LAST_ERROR = None
+    cache_key = (secret_name, label, region)
+    if cache_key in _mcp_secret_cache:
+        return _mcp_secret_cache[cache_key]
+    try:
+        initial, session_id = _mcp_post(
+            {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+             'params': {'protocolVersion': '2025-06-18',
+                        'clientInfo': {'name': 'asm-exec', 'version': '1.0.0'},
+                        'capabilities': {}}})
+        if not isinstance(initial, dict) or initial.get('error'):
+            MCP_LAST_ERROR = {'class': 'protocol', 'code': 'initialize_failed'}
+            return None
+        _mcp_post({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, session_id)
+        # All literals below are identifiers, never secret values. repr prevents
+        # a name/version/region from becoming executable Python syntax.
+        code = (
+            "response = await call_boto3(service_name='secretsmanager', "
+            "operation_name='GetSecretValue', region_name=" + repr(region) +
+            ", params=" + repr({'SecretId': secret_name, 'VersionStage': label}) + ")\n"
+            "result = {'SecretString': response['SecretString']}\nresult"
+        )
+        response, _ = _mcp_post(
+            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+             'params': {'name': 'aws___run_script', 'arguments': {'code': code}}}, session_id)
+        deadline, iteration = time.monotonic() + 90, 0
+        while True:
+            if not isinstance(response, dict) or not isinstance(response.get('result'), dict):
+                MCP_LAST_ERROR = {'class': 'protocol', 'code': 'unexpected_response_shape'}
+                return None
+            if response.get('error') or response['result'].get('isError'):
+                MCP_LAST_ERROR = {'class': 'provider', 'code': 'tool_failed'}
+                return None
+            value = _mcp_verified_secret(response)
+            if value:
+                _mcp_secret_cache[cache_key] = value
+                return value
+            pending = _mcp_working_task(response)
+            if not pending or time.monotonic() >= deadline:
+                MCP_LAST_ERROR = {'class': 'provider', 'code': 'no_verified_return_value'}
+                return None
+            task_id, wait = pending
+            time.sleep(wait)
+            iteration += 1
+            response, _ = _mcp_post(
+                {'jsonrpc': '2.0', 'id': 2 + iteration, 'method': 'tools/call',
+                 'params': {'name': 'aws___get_tasks', 'arguments':
+                            {'task_ids': [task_id], 'poll_iteration': iteration}}}, session_id)
+    except urllib.error.HTTPError as error:
+        MCP_LAST_ERROR = {'class': 'http', 'code': error.code}
+    except Exception:
+        # Deliberately fail closed without exception text or a traceback. A
+        # response/transport exception may contain credential-bearing payloads.
+        MCP_LAST_ERROR = {'class': 'transport_or_response', 'code': 'resolution_failed'}
+    return None
+
+
+def resolve_one(ref):
+    """Resolve secret-id[:field-type[:json-key[:version-stage]]].
+
+    Secret-id may be an ARN (contains colons) or a plain name.
+    ARN format: arn:aws:secretsmanager:<Region>:<AccountId>:secret:<SecretName>-<6RandomChars>
+    """
+    # ARN-aware split: if ref starts with 'arn:', treat everything up to
+    # the 7th colon as the secret-id (6 colons in a standard ARN)
+    if ref.startswith('arn:'):
+        arn_parts = ref.split(':')
+        # Standard ARN has 7 segments (indices 0-6): arn:partition:service:region:account:resource-type:resource-id
+        if len(arn_parts) >= 7:
+            secret_name = ':'.join(arn_parts[:7])
+            remainder = arn_parts[7:]
+        else:
+            secret_name = ref
+            remainder = []
+        field_type = remainder[0] if len(remainder) > 0 else 'SecretString'
+        json_key = remainder[1] if len(remainder) > 1 else None
+        label = remainder[2] if len(remainder) > 2 else 'AWSCURRENT'
+    else:
+        parts = ref.split(':', 3)
+        secret_name = parts[0]
+        field_type = parts[1] if len(parts) > 1 else 'SecretString'
+        json_key = parts[2] if len(parts) > 2 else None
+        label = parts[3] if len(parts) > 3 else 'AWSCURRENT'
+
+    if field_type != 'SecretString':
+        print(f'asm-exec: ERROR: Only SecretString is supported, got: {field_type}', file=sys.stderr)
+        sys.exit(1)
+
+    value = None
+
+    # Region for cross-region secrets: honor an ARN's region segment first,
+    # then fall back to the ambient AWS_REGION / AWS_DEFAULT_REGION.
+    region = None
+    if secret_name.startswith('arn:'):
+        arn_segments = secret_name.split(':')
+        if len(arn_segments) >= 4 and arn_segments[3]:
+            region = arn_segments[3]
+    if not region:
+        region = os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION')
+
+    # 1. Try SMA daemon
+    if _check_sma():
+        url = f'{SMA_ENDPOINT}/secretsmanager/get?secretId={urllib.parse.quote(secret_name, safe="")}&versionStage={label}'
+        req = urllib.request.Request(url, method='GET')
+        if SSRF_TOKEN:
+            req.add_header('X-Aws-Parameters-Secrets-Token', SSRF_TOKEN)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                value = data.get('SecretString')
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            pass
+
+    # 2. Resolve via Streamable HTTP MCP
+    if not value:
+        value = _resolve_via_mcp(secret_name, label, region)
+
+    if not value:
+        print(f'asm-exec: ERROR: Failed to resolve: {ref}', file=sys.stderr)
+        sys.exit(1)
+
+    if json_key:
+        try:
+            obj = json.loads(value)
+            value = obj[json_key]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            print(f"asm-exec: ERROR: JSON key '{json_key}' not found in: {secret_name}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(value, str):
+            value = json.dumps(value)
+
+    return value
+
+
+def resolve_string(s):
+    """Single-pass substitution — resolved values are never re-scanned."""
+    return PATTERN.sub(lambda m: resolve_one(m.group(1)), s)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print('Usage: asm-exec <command> [args...]', file=sys.stderr)
+        sys.exit(1)
+
+    cmd_args = sys.argv[1:]
+    # Strip optional -- separator (convention: asm-exec -- command)
+    if cmd_args and cmd_args[0] == '--':
+        cmd_args = cmd_args[1:]
+    if not cmd_args:
+        print('Usage: asm-exec <command> [args...]', file=sys.stderr)
+        sys.exit(1)
+
+    args = [resolve_string(a) if PATTERN.search(a) else a for a in cmd_args]
+
+    result = subprocess.run(args)
+    sys.exit(result.returncode)
+
+
+if __name__ == '__main__':
+    main()
