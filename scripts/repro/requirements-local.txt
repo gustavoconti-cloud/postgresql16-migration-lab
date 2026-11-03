@@ -1,0 +1,5 @@
+# Versions used by the original laboratory controller runtime and offline QA.
+# Install in an operator-owned virtual environment; no runtime/cache is shipped.
+boto3==1.43.114
+botocore==1.43.114
+cfn-lint==1.57.2

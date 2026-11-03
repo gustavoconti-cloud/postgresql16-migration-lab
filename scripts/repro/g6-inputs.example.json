@@ -1,0 +1,16 @@
+{
+  "run_id": null,
+  "task_arn": null,
+  "marker_id": 901,
+  "marker_evidence": "RUN-01-g6a-freeze-0-marker-901.json",
+  "source_freeze_evidence": "RUN-01-g6a-freeze-1-freeze-source.json",
+  "target_freeze_evidence": "RUN-01-g6a-freeze-2-freeze-target.json",
+  "marker_observe_evidence": "RUN-01-g6a-freeze-3-observe.json",
+  "revalidation_request": "RUN-01-g6a-revalidate-result.json",
+  "native_readback": "RUN-01-g6a-native-result.json",
+  "metrics_readback": "RUN-01-g6a-metrics-result.json",
+  "logs_readback": "RUN-01-g6a-logs.json",
+  "divergence_comparison": "RUN-01-t04-difference-0-compare.json",
+  "t04_revalidation_request": "RUN-01-t04-revalidate-result.json",
+  "native_divergence_failure": "RUN-01-t04-native-failed-result.json"
+}

@@ -1,0 +1,26 @@
+{
+  "account": null,
+  "region": "us-east-1",
+  "run_id": null,
+  "verified_at_utc": null,
+  "gates": {"G6": false, "T07": false, "T08": false, "repeat": false},
+  "captures": {
+    "slot": false,
+    "disk": false,
+    "state": false,
+    "no_active_tests": false,
+    "source_frozen_after_target_release": false,
+    "target_exclusive_commit": false,
+    "diffs": false,
+    "negative_block": false,
+    "replay_ledger": false
+  },
+  "cutover_markers": [901, 902],
+  "files": [
+    {"kind": "final-inspect", "path": null, "sha256": null},
+    {"kind": "target-commit", "path": null, "sha256": null},
+    {"kind": "diffs", "path": null, "sha256": null},
+    {"kind": "negative-block", "path": null, "sha256": null},
+    {"kind": "replay-ledger", "path": null, "sha256": null}
+  ]
+}
