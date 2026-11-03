@@ -1,0 +1,8 @@
+Third-party component notice: AWS asm-exec
+
+Upstream NOTICE, retained verbatim:
+
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+
+The laboratory compatibility derivative is identified in THIRD-PARTY.md and in its file header. This package does not imply AWS endorsement. The original upstream license and notice are distributed under LICENSES/.
