@@ -1,0 +1,110 @@
+{
+  "evaluation_date_local": "2026-10-15",
+  "region": "us-east-1",
+  "currency": "USD",
+  "billing_basis": "On-Demand, no Free Tier, no credits, no commitments; no taxes/support",
+  "rates": {
+    "ec2_t3_small_per_hour": "0.0209",
+    "ebs_gp3_per_gb_month": "0.08",
+    "rds_t4g_micro_per_hour": "0.016",
+    "rds_t4g_small_per_hour": "0.032",
+    "rds_gp3_per_gb_month": "0.115",
+    "dms_t3_medium_single_az_per_hour": "0.0745",
+    "nat_gateway_per_hour": "0.045",
+    "nat_gateway_processed_per_gb": "0.045",
+    "public_ipv4_per_hour": "0.005"
+  },
+  "hourly_base_small_usd": "0.1827424657534246575342465753",
+  "assumptions": [
+    "All components available continuously for the scenario hours, then fully deleted.",
+    "20 GiB EBS gp3 default IOPS/throughput; 20 GiB RDS gp3 default IOPS/throughput.",
+    "DMS T3's included 50 GiB gp2; no additional DMS storage. Using gp3 would require separate confirmation of its billing.",
+    "One NAT zonal gateway and one EIP; EC2/RDS/DMS are private in same AZ.",
+    "Auxiliary reserve is an allowance, not a priced volume forecast. It covers low-volume NAT/logs/traffic/backups and rounding.",
+    "EC2 catalog returns 0.0208/h, public T3 page 0.0209/h; the higher rate is used.",
+    "NAT and EBS rate snapshot for us-east-1; verify current public AWS prices before use.",
+    "These are hypothetical laboratory cost scenarios, not actual account charges or spending authorization."
+  ],
+  "scenarios": [
+    {
+      "rds_class": "db.t4g.micro",
+      "hours": 72,
+      "component_usd": {
+        "EC2 t3.small Linux": "1.50",
+        "EBS gp3 20 GiB": "0.16",
+        "RDS db.t4g.micro Single-AZ": "1.15",
+        "RDS gp3 20 GiB": "0.23",
+        "DMS dms.t3.medium Single-AZ": "5.36",
+        "DMS included 50 GiB gp2": "0.00",
+        "NAT zonal one gateway": "3.24",
+        "One Elastic IP": "0.36"
+      },
+      "base_usd": "12.01",
+      "auxiliary_reserve_usd": "20.00",
+      "base_plus_auxiliary_reserve_usd": "32.01",
+      "base_plus_50_percent_contingency_plus_auxiliary_usd": "38.01",
+      "all_vcpu_hours_surplus_upper_allowance_usd": "28.80",
+      "base_plus_full_cpu_upper_allowance_plus_auxiliary_usd": "60.81"
+    },
+    {
+      "rds_class": "db.t4g.micro",
+      "hours": 168,
+      "component_usd": {
+        "EC2 t3.small Linux": "3.51",
+        "EBS gp3 20 GiB": "0.37",
+        "RDS db.t4g.micro Single-AZ": "2.69",
+        "RDS gp3 20 GiB": "0.53",
+        "DMS dms.t3.medium Single-AZ": "12.52",
+        "DMS included 50 GiB gp2": "0.00",
+        "NAT zonal one gateway": "7.56",
+        "One Elastic IP": "0.84"
+      },
+      "base_usd": "28.01",
+      "auxiliary_reserve_usd": "20.00",
+      "base_plus_auxiliary_reserve_usd": "48.01",
+      "base_plus_50_percent_contingency_plus_auxiliary_usd": "62.02",
+      "all_vcpu_hours_surplus_upper_allowance_usd": "67.20",
+      "base_plus_full_cpu_upper_allowance_plus_auxiliary_usd": "115.21"
+    },
+    {
+      "rds_class": "db.t4g.small",
+      "hours": 72,
+      "component_usd": {
+        "EC2 t3.small Linux": "1.50",
+        "EBS gp3 20 GiB": "0.16",
+        "RDS db.t4g.small Single-AZ": "2.30",
+        "RDS gp3 20 GiB": "0.23",
+        "DMS dms.t3.medium Single-AZ": "5.36",
+        "DMS included 50 GiB gp2": "0.00",
+        "NAT zonal one gateway": "3.24",
+        "One Elastic IP": "0.36"
+      },
+      "base_usd": "13.16",
+      "auxiliary_reserve_usd": "20.00",
+      "base_plus_auxiliary_reserve_usd": "33.16",
+      "base_plus_50_percent_contingency_plus_auxiliary_usd": "39.74",
+      "all_vcpu_hours_surplus_upper_allowance_usd": "28.80",
+      "base_plus_full_cpu_upper_allowance_plus_auxiliary_usd": "61.96"
+    },
+    {
+      "rds_class": "db.t4g.small",
+      "hours": 168,
+      "component_usd": {
+        "EC2 t3.small Linux": "3.51",
+        "EBS gp3 20 GiB": "0.37",
+        "RDS db.t4g.small Single-AZ": "5.38",
+        "RDS gp3 20 GiB": "0.53",
+        "DMS dms.t3.medium Single-AZ": "12.52",
+        "DMS included 50 GiB gp2": "0.00",
+        "NAT zonal one gateway": "7.56",
+        "One Elastic IP": "0.84"
+      },
+      "base_usd": "30.70",
+      "auxiliary_reserve_usd": "20.00",
+      "base_plus_auxiliary_reserve_usd": "50.70",
+      "base_plus_50_percent_contingency_plus_auxiliary_usd": "66.05",
+      "all_vcpu_hours_surplus_upper_allowance_usd": "67.20",
+      "base_plus_full_cpu_upper_allowance_plus_auxiliary_usd": "117.90"
+    }
+  ]
+}
